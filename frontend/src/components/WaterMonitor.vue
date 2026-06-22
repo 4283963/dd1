@@ -2,19 +2,29 @@
   <div class="monitor-card" :class="{ 'health-warning': isWarning }">
     <div class="card-header">
       <h2>🌊 海洋牧场水质监控</h2>
-      <div class="selector">
-        <label for="box-select">选择网箱：</label>
-        <select
-          id="box-select"
-          v-model="selectedBox"
-          @change="onBoxChange"
-          :disabled="loading"
-        >
-          <option value="" disabled>-- 请选择 --</option>
-          <option v-for="box in boxes" :key="box.box_id" :value="box.box_id">
-            {{ box.box_id }}
-          </option>
-        </select>
+      <div class="header-right">
+        <div class="selector">
+          <label for="box-select">选择网箱：</label>
+          <select
+            id="box-select"
+            v-model="selectedBox"
+            @change="onBoxChange"
+            :disabled="loading"
+          >
+            <option value="" disabled>-- 请选择 --</option>
+            <option v-for="box in boxes" :key="box.box_id" :value="box.box_id">
+              {{ box.box_id }}
+            </option>
+          </select>
+        </div>
+        <div class="patrol-toggle">
+          <label class="switch">
+            <input type="checkbox" v-model="patrolOn" @change="onPatrolToggle" />
+            <span class="slider"></span>
+          </label>
+          <span class="patrol-label">{{ patrolOn ? '轮巡中' : '自动轮巡' }}</span>
+          <span v-if="patrolOn" class="patrol-countdown">{{ countdown }}s</span>
+        </div>
       </div>
     </div>
 
@@ -44,11 +54,26 @@
       </div>
     </div>
     <div v-else class="empty">请选择一个网箱查看水质数据</div>
+
+    <Teleport to="body">
+      <div v-if="alertVisible" class="alert-overlay" @click.self>
+        <div class="alert-box">
+          <div class="alert-icon">🚨</div>
+          <div class="alert-title">水质健康指数持续报警</div>
+          <div class="alert-body">
+            网箱 <b>{{ alertBoxId }}</b> 的健康指数连续 3 次低于 60 分危险线！<br />
+            当前指数：<b class="alert-score">{{ alertScores.join(' → ') }}</b><br />
+            请立即排查溶解氧、温度、盐度是否异常！
+          </div>
+          <button class="alert-btn" @click="dismissAlert">我知道了</button>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onErrorCaptured } from 'vue'
+import { ref, computed, onErrorCaptured, onUnmounted } from 'vue'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
@@ -82,6 +107,15 @@ const loading = ref(false)
 const error = ref('')
 const renderError = ref(false)
 
+const patrolOn = ref(false)
+let patrolTimer: ReturnType<typeof setInterval> | null = null
+const countdown = ref(10)
+let countdownTimer: ReturnType<typeof setInterval> | null = null
+
+const alertVisible = ref(false)
+const alertBoxId = ref('')
+const alertScores = ref<number[]>([])
+
 onErrorCaptured((e) => {
   console.error('组件渲染异常:', e)
   renderError.value = true
@@ -95,6 +129,51 @@ fetchBoxes()
     console.error('获取网箱列表失败:', e)
     error.value = '获取网箱列表失败，请检查后端连接'
   })
+
+onUnmounted(() => {
+  stopPatrol()
+})
+
+function startPatrol() {
+  if (boxes.value.length === 0) return
+  countdown.value = 10
+
+  countdownTimer = setInterval(() => {
+    countdown.value -= 1
+    if (countdown.value <= 0) countdown.value = 10
+  }, 1000)
+
+  patrolTimer = setInterval(() => {
+    const idx = boxes.value.findIndex((b) => b.box_id === selectedBox.value)
+    const nextIdx = (idx + 1) % boxes.value.length
+    selectedBox.value = boxes.value[nextIdx].box_id
+    onBoxChange()
+    countdown.value = 10
+  }, 10000)
+}
+
+function stopPatrol() {
+  if (patrolTimer) {
+    clearInterval(patrolTimer)
+    patrolTimer = null
+  }
+  if (countdownTimer) {
+    clearInterval(countdownTimer)
+    countdownTimer = null
+  }
+}
+
+function onPatrolToggle() {
+  if (patrolOn.value) {
+    if (selectedBox.value === '' && boxes.value.length > 0) {
+      selectedBox.value = boxes.value[0].box_id
+      onBoxChange()
+    }
+    startPatrol()
+  } else {
+    stopPatrol()
+  }
+}
 
 const hasMissingData = computed(() => {
   return waterData.value.some(
@@ -134,6 +213,25 @@ const isWarning = computed(() => {
   return latestWithIndex ? (latestWithIndex.health_index as number) < 60 : false
 })
 
+function checkConsecutiveLowHealth() {
+  const validPoints = waterData.value
+    .filter((d) => d.health_index != null)
+    .map((d) => d.health_index as number)
+
+  if (validPoints.length < 3) return
+
+  const last3 = validPoints.slice(-3)
+  if (last3.every((v) => v < 60)) {
+    alertBoxId.value = selectedBox.value
+    alertScores.value = last3
+    alertVisible.value = true
+  }
+}
+
+function dismissAlert() {
+  alertVisible.value = false
+}
+
 async function onBoxChange() {
   if (!selectedBox.value) return
   loading.value = true
@@ -151,6 +249,8 @@ async function onBoxChange() {
     )
     if (waterData.value.length === 0) {
       error.value = '该网箱最近24小时的有效数据为空'
+    } else {
+      checkConsecutiveLowHealth()
     }
   } catch (e: any) {
     console.error('获取水质数据失败:', e)
@@ -339,12 +439,21 @@ const chartOption = computed(() => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 .card-header h2 {
   margin: 0;
   font-size: 22px;
   color: #1a1a2e;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
 }
 
 .selector label {
@@ -369,6 +478,74 @@ const chartOption = computed(() => {
 .selector select:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.patrol-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ccc;
+  transition: 0.3s;
+  border-radius: 22px;
+}
+
+.slider::before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: 0.3s;
+  border-radius: 50%;
+}
+
+input:checked + .slider {
+  background-color: #1890ff;
+}
+
+input:checked + .slider::before {
+  transform: translateX(18px);
+}
+
+.patrol-label {
+  font-size: 13px;
+  color: #555;
+  white-space: nowrap;
+}
+
+.patrol-countdown {
+  font-size: 12px;
+  color: #1890ff;
+  font-weight: 600;
+  background: #e6f7ff;
+  padding: 2px 8px;
+  border-radius: 10px;
+  min-width: 30px;
+  text-align: center;
 }
 
 .loading,
@@ -419,5 +596,92 @@ const chartOption = computed(() => {
 .warning-hint {
   color: #ff4d4f;
   font-weight: 500;
+}
+</style>
+
+<style>
+.alert-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 9999;
+  animation: alert-fade-in 0.3s ease;
+}
+
+.alert-box {
+  background: #fff;
+  border: 3px solid #ff4d4f;
+  border-radius: 16px;
+  padding: 36px 44px;
+  max-width: 460px;
+  text-align: center;
+  box-shadow: 0 0 60px rgba(255, 77, 79, 0.45);
+  animation: alert-pulse 1.2s ease-in-out infinite alternate;
+}
+
+.alert-icon {
+  font-size: 52px;
+  margin-bottom: 12px;
+  animation: alert-shake 0.5s ease-in-out infinite;
+}
+
+.alert-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #cf1322;
+  margin-bottom: 14px;
+}
+
+.alert-body {
+  font-size: 15px;
+  color: #333;
+  line-height: 1.8;
+  margin-bottom: 24px;
+}
+
+.alert-score {
+  color: #cf1322;
+  font-size: 17px;
+}
+
+.alert-btn {
+  background: #ff4d4f;
+  color: #fff;
+  border: none;
+  padding: 10px 40px;
+  font-size: 16px;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+}
+
+.alert-btn:hover {
+  background: #d9363e;
+}
+
+.alert-btn:active {
+  transform: scale(0.97);
+}
+
+@keyframes alert-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes alert-pulse {
+  from { box-shadow: 0 0 40px rgba(255, 77, 79, 0.35); }
+  to { box-shadow: 0 0 70px rgba(255, 77, 79, 0.6); }
+}
+
+@keyframes alert-shake {
+  0%, 100% { transform: rotate(0deg); }
+  20% { transform: rotate(-8deg); }
+  40% { transform: rotate(8deg); }
+  60% { transform: rotate(-5deg); }
+  80% { transform: rotate(5deg); }
 }
 </style>
