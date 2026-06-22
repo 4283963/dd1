@@ -7,9 +7,9 @@ class SeaWaterData(Base):
 
     id = Column(String, primary_key=True)
     box_id = Column(String, nullable=False, index=True)
-    dissolved_oxygen = Column(Float, nullable=False)
-    temperature = Column(Float, nullable=False)
-    salinity = Column(Float, nullable=False)
+    dissolved_oxygen = Column(Float, nullable=True)
+    temperature = Column(Float, nullable=True)
+    salinity = Column(Float, nullable=True)
     timestamp = Column(DateTime, nullable=False, index=True)
 
     __table_args__ = (

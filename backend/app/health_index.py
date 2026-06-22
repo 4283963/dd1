@@ -1,23 +1,46 @@
-import math
+from typing import Optional, Tuple
 
 
-def calc_health_index(dissolved_oxygen: float, temperature: float, salinity: float) -> float:
+def calc_health_index(
+    dissolved_oxygen: Optional[float],
+    temperature: Optional[float],
+    salinity: Optional[float],
+) -> Tuple[Optional[float], list[str]]:
     """
     水质健康指数计算（0~100，越高越好）
 
-    三个指标各占权重，偏离最佳范围越远扣分越多：
-    - 溶解氧 (权重 0.4): 最佳 6~9 mg/L，海水养殖安全下限 5 mg/L
-    - 温度   (权重 0.3): 最佳 18~26 °C，超出范围升温比降温更危险
-    - 盐度   (权重 0.3): 最佳 28~34 ‰，近海养殖常见范围
-
-    每个指标得分 = 100 - penalty，最终加权求和
+    空值处理：某个指标缺失时，从计算中剔除该指标，并重新分配权重。
+    若三个指标全部缺失，返回 (None, 缺失列表)。
     """
-    do_score = _dissolved_oxygen_score(dissolved_oxygen)
-    temp_score = _temperature_score(temperature)
-    sal_score = _salinity_score(salinity)
+    missing: list[str] = []
+    scores: list[float] = []
+    weights: list[float] = []
 
-    raw = 0.4 * do_score + 0.3 * temp_score + 0.3 * sal_score
-    return round(max(0.0, min(100.0, raw)), 1)
+    if dissolved_oxygen is not None:
+        scores.append(_dissolved_oxygen_score(dissolved_oxygen))
+        weights.append(0.4)
+    else:
+        missing.append("dissolved_oxygen")
+
+    if temperature is not None:
+        scores.append(_temperature_score(temperature))
+        weights.append(0.3)
+    else:
+        missing.append("temperature")
+
+    if salinity is not None:
+        scores.append(_salinity_score(salinity))
+        weights.append(0.3)
+    else:
+        missing.append("salinity")
+
+    if not scores:
+        return None, missing
+
+    total_weight = sum(weights)
+    normalized = [w / total_weight for w in weights]
+    raw = sum(s * w for s, w in zip(scores, normalized))
+    return round(max(0.0, min(100.0, raw)), 1), missing
 
 
 def _dissolved_oxygen_score(do: float) -> float:
